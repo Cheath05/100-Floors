@@ -1,46 +1,12 @@
-// The town's teleport gate: a stepped stone dais with four obelisks, a low back wall bearing the
-// town crest, and a swirling blue sphere of light floating over a glowing rune ring.
+// The town's teleport gate: a stepped stone dais with four carved obelisks, a low back wall bearing
+// the town crest (a tower inside a ring), and a swirling blue sphere of light floating over a
+// glowing rune ring. The stonework is a modelled asset (art/gate/gate.blend, exported to
+// public/models/teleport_gate.glb); the orb, rune ring and sparks are shaders here.
 // Original design; front faces +Z.
 import * as THREE from 'three';
+import type { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-type MatFactory = (texture: string) => THREE.MeshStandardMaterial;
-
-/** A box whose UVs are in world units / `tile`, so one texture keeps its scale at any size. */
-function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Material[], tile = 2): THREE.Mesh {
-  const g = new THREE.BoxGeometry(w, h, d);
-  const uv = g.getAttribute('uv') as THREE.BufferAttribute;
-  // Face order: +x, -x, +y, -y, +z, -z.
-  const dims = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]] as const;
-  for (let f = 0; f < 6; f++) {
-    for (let i = 0; i < 4; i++) {
-      const k = f * 4 + i;
-      uv.setXY(k, (uv.getX(k) * dims[f]![0]) / tile, (uv.getY(k) * dims[f]![1]) / tile);
-    }
-  }
-  const m = new THREE.Mesh(g, mat);
-  m.castShadow = m.receiveShadow = true;
-  return m;
-}
-
-/** Square-section tapered shaft (a 4-sided cylinder turned 45 degrees). `w` is the side length. */
-function shaft(wBottom: number, wTop: number, h: number, mat: THREE.Material, tile = 2): THREE.Mesh {
-  const g = new THREE.CylinderGeometry(wTop / Math.SQRT2, wBottom / Math.SQRT2, h, 4, 1, true);
-  g.rotateY(Math.PI / 4);
-  const uv = g.getAttribute('uv') as THREE.BufferAttribute;
-  for (let k = 0; k < uv.count; k++) uv.setXY(k, (uv.getX(k) * 4 * wBottom) / tile, (uv.getY(k) * h) / tile);
-  g.computeVertexNormals();
-  const m = new THREE.Mesh(g, mat);
-  m.castShadow = m.receiveShadow = true;
-  return m;
-}
-
-function pyramid(w: number, h: number, mat: THREE.Material): THREE.Mesh {
-  const g = new THREE.ConeGeometry(w / Math.SQRT2, h, 4, 1);
-  g.rotateY(Math.PI / 4);
-  const m = new THREE.Mesh(g, mat);
-  m.castShadow = m.receiveShadow = true;
-  return m;
-}
+export const GATE_MODEL = '/models/teleport_gate.glb';
 
 const NOISE = `
   float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
@@ -163,94 +129,32 @@ export interface Gate {
   update(t: number): void;
 }
 
-export function teleportGate(pbr: MatFactory): Gate {
+/** Loads the modelled gate and adds the animated effects at its `Gate_Orb` / `Gate_Runes` anchors. */
+export async function teleportGate(loader: GLTFLoader): Promise<Gate> {
   const time = { value: 0 };
-  const blocks = pbr('large_sandstone_blocks_01');
-  const paving = pbr('granite_tile');
-  const carved = pbr('sandstone_cracks');
-  carved.color.set('#c4ccd9'); // cool the warm sandstone toward pale grey
-  const gold = new THREE.MeshStandardMaterial({ color: '#c9a04a', metalness: 1, roughness: 0.32 });
+  const g = (await loader.loadAsync(GATE_MODEL)).scene;
   const inlay = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.35, 0.8, 1.6) });
-  const g = new THREE.Group();
-
-  // Three tiers: sandstone block sides, granite paving on top. Each tier is a step on every side.
-  const tiers: [number, number][] = [
-    [11, 9],
-    [9.4, 7.6],
-    [7.8, 6.2],
-  ];
-  const TIER_H = 0.32;
-  tiers.forEach(([w, d], i) => {
-    const t = box(w, TIER_H, d, [blocks, blocks, paving, blocks, blocks, blocks], 2.4);
-    t.position.y = TIER_H * (i + 0.5);
-    g.add(t);
-  });
-  const deckY = TIER_H * tiers.length;
-
-  // Four obelisks on stepped plinths at the corners.
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const o = new THREE.Group();
-      o.position.set(sx * 4.55, 0, sz * 3.55);
-      const plinth = box(1.7, 1.5, 1.7, blocks, 1.6);
-      plinth.position.y = 0.75;
-      const ledge = box(1.95, 0.22, 1.95, carved, 1.2);
-      ledge.position.y = 1.61;
-      const step2 = box(1.3, 0.55, 1.3, blocks, 1.2);
-      step2.position.y = 1.995;
-      const band = box(1.12, 0.12, 1.12, gold);
-      band.position.y = 2.33;
-      const body = shaft(0.95, 0.62, 3.4, carved, 1.6);
-      body.position.y = 2.39 + 1.7;
-      const collar = box(0.74, 0.16, 0.74, gold);
-      collar.position.y = 5.87;
-      const tip = pyramid(0.7, 1.05, carved);
-      tip.position.y = 5.95 + 0.525;
-      o.add(plinth, ledge, step2, band, body, collar, tip);
-      // A glowing diamond inlay on the two faces that look at the plaza and the sphere.
-      for (const [nx, nz] of [
-        [0, 1],
-        [-sx, 0],
-      ] as const) {
-        const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.11, 0), inlay);
-        gem.scale.set(nx ? 0.3 : 1, 1.8, nz ? 0.3 : 1);
-        gem.position.set(nx * 0.445, 3.2, nz * 0.445);
-        o.add(gem);
-      }
-      g.add(o);
+  g.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    const mats = (Array.isArray(o.material) ? o.material : [o.material]) as THREE.MeshStandardMaterial[];
+    if (mats.some((m) => m.name === 'GateInlay')) {
+      // The diamond inlays glow past the tone mapper so bloom picks them up.
+      o.material = inlay;
+      return;
     }
-  }
-
-  // Low back wall with corner posts and the town crest (a tower inside a ring).
-  const wallZ = -2.6;
-  const wall = box(4.4, 1.5, 0.6, blocks, 1.6);
-  wall.position.set(0, deckY + 0.75, wallZ);
-  const coping = box(4.7, 0.18, 0.8, carved, 1.2);
-  coping.position.set(0, deckY + 1.59, wallZ);
-  g.add(wall, coping);
-  for (const sx of [-1, 1]) {
-    const post = box(0.75, 2.3, 0.75, blocks, 1.4);
-    post.position.set(sx * 2.45, deckY + 1.15, wallZ);
-    const cap = pyramid(0.85, 0.6, carved);
-    cap.position.set(sx * 2.45, deckY + 2.6, wallZ);
-    g.add(post, cap);
-  }
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.05, 8, 40), gold);
-  ring.position.set(0, deckY + 0.85, wallZ + 0.32);
-  const tower = new THREE.Group();
-  const towerBody = box(0.2, 0.46, 0.06, gold);
-  towerBody.position.y = -0.03;
-  tower.add(towerBody);
-  for (const x of [-0.08, 0, 0.08]) {
-    const merlon = box(0.05, 0.08, 0.06, gold);
-    merlon.position.set(x, 0.24, 0);
-    tower.add(merlon);
-  }
-  tower.position.copy(ring.position);
-  g.add(ring, tower);
+    o.castShadow = o.receiveShadow = true;
+    for (const m of mats) for (const t of [m.map, m.normalMap]) if (t) t.anisotropy = 8;
+  });
+  g.updateMatrixWorld(true);
+  const anchor = (name: string) => {
+    const o = g.getObjectByName(name);
+    if (!o) throw new Error(`${GATE_MODEL} has no ${name}`);
+    return o.getWorldPosition(new THREE.Vector3());
+  };
 
   // The gate itself: a floating sphere of swirling light over a rune circle.
-  const center = new THREE.Vector3(0, deckY + 2.1, 0.3);
+  const center = anchor('Gate_Orb');
+  const deck = anchor('Gate_Runes');
   const orb = new THREE.Mesh(new THREE.SphereGeometry(1.55, 64, 48), sphereMaterial(time, false));
   orb.position.copy(center);
   const core = new THREE.Mesh(new THREE.SphereGeometry(1.2, 48, 32), sphereMaterial(time, true));
@@ -259,9 +163,9 @@ export function teleportGate(pbr: MatFactory): Gate {
   core.renderOrder = 3;
   const runes = new THREE.Mesh(new THREE.RingGeometry(1.6, 2.5, 96, 1), runeRingMaterial(time, 1.6, 2.5));
   runes.rotation.x = -Math.PI / 2;
-  runes.position.set(center.x, deckY + 0.012, center.z);
+  runes.position.set(deck.x, deck.y + 0.012, deck.z);
   const sparks = motes(time, 1.9, 4.2, 90);
-  sparks.position.set(center.x, deckY, center.z);
+  sparks.position.copy(deck);
   const light = new THREE.PointLight('#68c4ff', 28, 14, 1.6);
   light.position.copy(center);
   g.add(orb, core, runes, sparks, light);

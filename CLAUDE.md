@@ -38,7 +38,9 @@ team boss fights. Three.js client, authoritative Colyseus server, TypeScript eve
   game: VRM anime characters (`@pixiv/three-vrm`, MToon) with Quaternius animations retargeted in
   `retarget.ts`; town from the Quaternius village kit; Poly Haven PBR textures and HDRI sky; ez-tree
   trees; `grass.ts`; original outfits/armor in `outfits.ts`; street props in `props.ts`; the
-  teleport gate (stepped dais, 4 obelisks, swirling orb) in `gate.ts`.
+  teleport gate in `gate.ts`: the stonework is a Blender model (`art/gate/gate.blend`, rebuilt by
+  `art/gate/build_gate.py`, exported to `client/public/models/teleport_gate.glb`); the orb, rune ring
+  and sparks are shaders placed at the model's `Gate_Orb` / `Gate_Runes` empties.
 - URL options: `?view=gate`, `?tm=agx|aces` (default neutral tone mapping keeps saturated anime
   color), `?ao=0`, `?grass=N`, `?ceiling=1` (rough floor-above sky), `?clips=A,B,C`.
 - Blender 5.2 with the official Blender Lab MCP (`blender` server, Blender add-on on localhost:9876)

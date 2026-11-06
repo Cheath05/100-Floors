@@ -382,7 +382,8 @@ Commit after each step to `claude/admiring-allen-o82s38` and push. No PR unless 
   look test (`client/lookdev.html`) tries a closer-to-SAO style: VRM anime characters with retargeted
   CC0 animations, CC0 village kit + Poly Haven PBR, ez-tree trees, original outfits and teleport gate,
   neutral tone mapping. Not adopted into the game yet; Blender + Blender MCP installed to model
-  proper assets. Step 2 (combat) waits until the style is settled.
+  proper assets (first one: the teleport gate, `art/gate/`). Step 2 (combat) waits until the style is
+  settled.
 
 ## Roadmap after M1
 - M2 Floors 2-10: 3 biome kits, mechanic library ~20, Extra skills, first Unique-skill quests, story

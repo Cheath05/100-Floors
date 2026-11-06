@@ -254,10 +254,11 @@ async function buildVillage(): Promise<void> {
 
 // ---- Gate -------------------------------------------------------------------------------------
 let gate: Gate | null = null;
-function buildGate(): void {
-  gate = teleportGate((name) => pbr(name, 1));
-  gate.group.position.set(0, 0, -7);
-  scene.add(gate.group);
+async function buildGate(): Promise<void> {
+  const g = await teleportGate(gltfLoader);
+  g.group.position.set(0, 0, -7);
+  scene.add(g.group);
+  gate = g;
 }
 
 // ---- Nature: ez-tree trees and Poly Haven rocks/plants ---------------------------------------
@@ -440,9 +441,8 @@ function frame(): void {
 async function main(): Promise<void> {
   log('Loading sky and ground...');
   buildGround();
-  buildGate();
   requestAnimationFrame(frame);
-  await loadSky();
+  await Promise.all([loadSky(), buildGate()]);
   scene.add(mountains(470));
   if (params.get('ceiling') === '1') scene.add(floorAbove(380, 1400));
   log('Building village...');
