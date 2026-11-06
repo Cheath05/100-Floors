@@ -31,6 +31,8 @@ const conn = new Connection({
     hud.showError(`Disconnected from the server (code ${code}). Reload the page to reconnect.`);
   },
 });
+// Dev-only handle for poking at the scene from the console (camera angles, screenshots).
+if (import.meta.env.DEV) Object.assign(window, { __game: { kit, cam, conn } });
 
 let acc = 0;
 let last = performance.now();

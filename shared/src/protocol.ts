@@ -8,7 +8,8 @@ export interface JoinOptions {
 }
 
 /** Character models available before the creator exists. */
-export const STARTER_MODELS = ['Knight', 'Rogue', 'Barbarian', 'Mage', 'Rogue_Hooded'] as const;
+/** Starting looks: a VRM avatar plus an outfit (client/src/render/characters.ts maps them). */
+export const STARTER_MODELS = ['Vanguard', 'Duelist', 'Wanderer', 'Fencer'] as const;
 
 /** Plain view of a synced player, for code that reads state without the schema classes. */
 export interface PlayerView {

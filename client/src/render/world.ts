@@ -1,341 +1,347 @@
-// Builds the visible world for a map from the same data the server collides with.
+// Builds the visible world for a map from the same data the server collides with, in the look-test
+// style: Poly Haven PBR ground, our Blender models (teleport gate, lamps, fountains, boss pillars,
+// city wall/towers/gatehouses, Hall of Remembrance), village-kit houses (instanced), ez-tree trees,
+// Poly Haven rocks and instanced grass. Models stream in after
+// buildWorld() returns; until then the ground is already there.
 import * as THREE from 'three';
-import type { MapDef, Prop } from '@floors/shared';
-import { noiseTexture, plazaTexture, setOutline, toonMaterial } from './toon';
+import { Tree } from '@dgreenheck/ez-tree';
+import { CITY, type MapDef, type Prop } from '@floors/shared';
+import { gltfLoader, pbr, polyModel, shadows, villageHouse, type HouseStyle } from './assets';
+import { teleportGate, type Gate } from './gate';
+import { createGrass } from './grass';
+import { instances, placeAt } from './instancing';
+import { marker, prop, propTime, type PropName } from './props';
+
+export interface WorldView {
+  group: THREE.Group;
+  /** Resolves when every model has loaded. */
+  ready: Promise<void>;
+  update(time: number): void;
+  dispose(): void;
+}
 
 function seeded(seed: number): () => number {
   let s = (seed * 2654435761) >>> 0 || 1;
   return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
 }
 
-const mats = {
-  stone: () => toonMaterial({ color: '#a7a1b0' }),
-  darkStone: () => toonMaterial({ color: '#5b5566' }),
-  wood: () => toonMaterial({ color: '#7a5235' }),
-  metal: () => toonMaterial({ color: '#3d3a44' }),
-};
+function flatOnGround<T extends THREE.Mesh>(m: T, y: number): T {
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = y;
+  m.receiveShadow = true;
+  return m;
+}
 
-function shadowAll(obj: THREE.Object3D): void {
-  obj.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (m.isMesh) {
-      m.castShadow = true;
-      m.receiveShadow = true;
-    }
+/** A PBR material whose texture repeats every `metres` on a surface `w` x `h` metres. */
+function tiled(name: string, w: number, h: number, metres: number): THREE.MeshStandardMaterial {
+  return pbr(name, [w / metres, h / metres]);
+}
+
+// ---- Trees -------------------------------------------------------------------------------------
+
+const TREE_PRESETS = ['Oak Large', 'Ash Large', 'Oak Medium', 'Pine Large', 'Aspen Medium', 'Oak Large'];
+let treeVariants: { tree: Tree; height: number }[] | null = null;
+
+/** A handful of generated trees; placements copy their meshes instead of generating each one. */
+function variants(): { tree: Tree; height: number }[] {
+  if (treeVariants) return treeVariants;
+  treeVariants = TREE_PRESETS.map((preset, i) => {
+    const tree = new Tree();
+    tree.loadPreset(preset);
+    tree.options.seed = 1000 + i * 17;
+    tree.generate();
+    shadows(tree);
+    const box = new THREE.Box3().setFromObject(tree);
+    return { tree, height: box.max.y - box.min.y };
   });
+  return treeVariants;
 }
 
-/** Animated portal surface for the Teleport Gate. */
-function portalMaterial(): THREE.ShaderMaterial {
-  const mat = new THREE.ShaderMaterial({
-    transparent: true,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-    uniforms: { time: { value: 0 } },
-    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-    fragmentShader: `uniform float time; varying vec2 vUv;
-      void main(){
-        vec2 p = vUv * 2.0 - 1.0;
-        float r = length(p);
-        float a = atan(p.y, p.x);
-        float swirl = sin(a * 5.0 + r * 9.0 - time * 2.4) * 0.5 + 0.5;
-        float edge = smoothstep(1.0, 0.6, r);
-        vec3 col = mix(vec3(0.25, 0.55, 0.95), vec3(0.85, 1.15, 1.35), swirl * (1.0 - r));
-        gl_FragColor = vec4(col, edge * (0.35 + 0.3 * swirl));
-      }`,
+function treeAt(x: number, z: number, height: number, rot: number, pick: number): THREE.Group {
+  const v = variants()[pick % TREE_PRESETS.length]!;
+  const g = new THREE.Group();
+  for (const c of v.tree.children) g.add(c.clone());
+  g.scale.setScalar(height / v.height);
+  g.position.set(x, 0, z);
+  g.rotation.y = rot;
+  return g;
+}
+
+// ---- Shared pieces -------------------------------------------------------------------------------
+
+function grassGround(group: THREE.Group): void {
+  // leafy_grass is mostly fallen leaves; tint it green so open ground reads as meadow.
+  const mat = pbr('leafy_grass', 280);
+  mat.color.set('#9cc472');
+  group.add(flatOnGround(new THREE.Mesh(new THREE.CircleGeometry(560, 96), mat), 0));
+}
+
+/** Distant ring of trees outside the walkable area, so the map edge reads as forest. */
+function forestEdge(group: THREE.Group, inner: number, outer: number, count: number, seed: number): void {
+  const r = seeded(seed);
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2 + r() * 0.2;
+    const d = inner + r() * (outer - inner);
+    group.add(treeAt(Math.sin(a) * d, Math.cos(a) * d, 10 + r() * 7, r() * Math.PI * 2, i));
+  }
+}
+
+// ---- Maps ----------------------------------------------------------------------------------------
+
+function buildTown(map: MapDef, group: THREE.Group, jobs: Promise<unknown>[], animated: { update(t: number): void }[]): void {
+  const { plazaR, avenueHalf, ringRoad, wallR } = CITY;
+  grassGround(group);
+  // City ground: mossy cobbles between the houses, dressed cobblestone on every street.
+  group.add(flatOnGround(new THREE.Mesh(new THREE.CircleGeometry(wallR + 1, 128), pbr('mossy_cobblestone', 64)), 0.006));
+  group.add(flatOnGround(new THREE.Mesh(new THREE.CircleGeometry(plazaR, 96), pbr('cobblestone_floor_01', 16)), 0.012));
+  group.add(flatOnGround(new THREE.Mesh(new THREE.RingGeometry(ringRoad.inner, ringRoad.outer, 160), pbr('cobblestone_floor_01', 68)), 0.01));
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(plazaR, 0.18, 6, 128), pbr('castle_brick_07', 36));
+  rim.rotation.x = -Math.PI / 2;
+  rim.position.y = 0.04;
+  rim.scale.z = 0.5;
+  rim.receiveShadow = true;
+  group.add(rim);
+  const len = wallR - plazaR + 4;
+  for (let i = 0; i < 4; i++) {
+    const street = new THREE.Mesh(new THREE.PlaneGeometry(avenueHalf * 2, len), tiled('cobblestone_floor_01', avenueHalf * 2, len, 1.8));
+    flatOnGround(street, 0.011);
+    const a = (i * Math.PI) / 2;
+    street.rotation.z = a;
+    const mid = plazaR + len / 2 - 2;
+    street.position.set(Math.sin(a) * mid, 0.011, Math.cos(a) * mid);
+    group.add(street);
+  }
+
+  // Meadow and woods outside the wall.
+  const grass = createGrass({ count: 50000, innerRadius: wallR + 4, outerRadius: 150, seed: 3 });
+  group.add(grass.mesh);
+  animated.push(grass);
+  forestEdge(group, wallR + 14, wallR + 60, 44, 5);
+
+  const by = (kind: Prop['kind']) => map.props.filter((p) => p.kind === kind);
+  jobs.push(...by('gate').map((p) => addGate(p, group, animated)));
+  jobs.push(...by('fountain').map((p) => place('Fountain', p, group)));
+  jobs.push(...by('hall').map((p) => place('MemorialHall', p, group)));
+  jobs.push(...by('cityGate').map((p) => place('CityGate', p, group)));
+  // Repeated pieces are instanced: one draw call per material for all copies.
+  const many = async (name: PropName, props: Prop[]) => {
+    const template = await prop(name);
+    group.add(instances(template, props.map((p) => placeAt(p.x, p.z, p.rot))));
+  };
+  jobs.push(many('Lamp', by('lamp')), many('CityWall', by('cityWall')), many('CityTower', by('cityTower')));
+  jobs.push(addHouses(by('building'), group));
+}
+
+function buildField(map: MapDef, group: THREE.Group, jobs: Promise<unknown>[], animated: { update(t: number): void }[]): void {
+  grassGround(group);
+  const solid = map.props.filter((p) => p.kind === 'tree' || p.kind === 'rock');
+  const grass = createGrass({
+    count: 90000,
+    innerRadius: 0,
+    outerRadius: 90,
+    seed: 3,
+    allow: (x, z) => solid.every((p) => Math.hypot(x - p.x, z - p.z) > (p.kind === 'rock' ? 1.0 : 0.6) * p.size),
   });
-  setOutline(mat, 0);
-  return mat;
-}
-
-function buildGate(): { group: THREE.Group; portal: THREE.ShaderMaterial } {
-  const g = new THREE.Group();
-  const stone = mats.stone();
-  for (const x of [-2.4, 2.4]) {
-    const base = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.6, 1.7), mats.darkStone());
-    base.position.set(x, 0.3, 0);
-    const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 5.4, 1.2), stone);
-    pillar.position.set(x, 3.3, 0);
-    g.add(base, pillar);
+  group.add(grass.mesh);
+  animated.push(grass);
+  for (const p of map.props) {
+    // Collider radius is 0.45 * size for trees; the trunk of a 9-15 m tree is about that wide.
+    if (p.kind === 'tree') group.add(treeAt(p.x, p.z, 7 + p.size * 5, p.rot, p.seed));
+    else if (p.kind === 'rock') jobs.push(addRock(p, group));
   }
-  const arch = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.5, 8, 24, Math.PI), stone);
-  arch.position.y = 6;
-  g.add(arch);
-  const keystone = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.55),
-    toonMaterial({ color: '#7fd4ff', emissive: '#3aa8ff', emissiveIntensity: 2.2 }),
-  );
-  keystone.position.y = 8.9;
-  g.add(keystone);
-  const portal = portalMaterial();
-  const plane = new THREE.Mesh(new THREE.CircleGeometry(2.3, 40), portal);
-  plane.position.y = 3.6;
-  plane.scale.y = 1.55;
-  g.add(plane);
-  shadowAll(g);
-  plane.castShadow = false;
-  return { group: g, portal };
+  forestEdge(group, 86, 120, 40, 9);
+  // Small plants: no collision, kept off the trees and rocks.
+  jobs.push(scatterPlants(group, solid, 'fern_02', 70, [1.5, 2.5], 7), scatterPlants(group, solid, 'grass_medium_01', 110, [1.4, 2.4], 9));
 }
 
-function buildBuilding(p: Prop): THREE.Group {
-  const r = seeded(p.seed);
-  const g = new THREE.Group();
-  const w = p.w ?? 6;
-  const h = p.size;
-  const walls = ['#efe2c8', '#e4d3b1', '#f3ead9', '#dccab0', '#e9d9c4'];
-  const roofs = ['#b4463c', '#3f6aa8', '#7b4a8c', '#2f7d6b', '#c07a2c'];
-  const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), toonMaterial({ color: walls[Math.floor(r() * walls.length)]! }));
-  body.position.y = h / 2;
-  g.add(body);
-  // Timber trim.
-  const trim = new THREE.Mesh(new THREE.BoxGeometry(w + 0.2, 0.35, w + 0.2), mats.wood());
-  trim.position.y = h * 0.45;
-  g.add(trim);
-  const roof = new THREE.Mesh(
-    new THREE.ConeGeometry(w * 0.82, 2.6 + r() * 1.6, 4),
-    toonMaterial({ color: roofs[Math.floor(r() * roofs.length)]! }),
-  );
-  roof.rotation.y = Math.PI / 4;
-  roof.position.y = h + (roof.geometry as THREE.ConeGeometry).parameters.height / 2;
-  g.add(roof);
-  // Door and windows on the side facing the plaza.
-  const face = new THREE.Group();
-  const toCenter = Math.atan2(-p.x, -p.z);
-  const side = Math.round(toCenter / (Math.PI / 2)) * (Math.PI / 2);
-  face.rotation.y = side;
-  const door = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.1, 0.12), mats.wood());
-  door.position.set(0, 1.05, w / 2 + 0.05);
-  face.add(door);
-  const winMat = toonMaterial({ color: '#ffe7a3', emissive: '#ffc95a', emissiveIntensity: 0.5 });
-  for (const wx of [-w * 0.3, w * 0.3]) {
-    const win = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.1), winMat);
-    win.position.set(wx, h * 0.68, w / 2 + 0.05);
-    face.add(win);
+function buildBossRoom(map: MapDef, group: THREE.Group, jobs: Promise<unknown>[], animated: { update(t: number): void }[]): void {
+  const b = map.bounds.kind === 'rect' ? map.bounds : { halfX: 30, halfZ: 30 };
+  const W = b.halfX * 2;
+  const D = b.halfZ * 2;
+  const H = 14;
+  group.add(flatOnGround(new THREE.Mesh(new THREE.PlaneGeometry(W, D), tiled('granite_tile', W, D, 3)), 0));
+  // Brick walls (texture tiled per wall so bricks keep one size) and a dark vaulted ceiling.
+  const walls: [number, number, number, number][] = [
+    [0, -b.halfZ - 0.5, W + 2, 0],
+    [0, b.halfZ + 0.5, W + 2, Math.PI],
+    [-b.halfX - 0.5, 0, D, Math.PI / 2],
+    [b.halfX + 0.5, 0, D, -Math.PI / 2],
+  ];
+  for (const [x, z, len, rot] of walls) {
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(len, H), tiled('castle_brick_07', len, H, 3));
+    wall.position.set(x, H / 2, z);
+    wall.rotation.y = rot;
+    wall.receiveShadow = true;
+    group.add(wall);
   }
-  g.add(face);
-  g.position.set(p.x, 0, p.z);
-  shadowAll(g);
-  return g;
-}
+  const ceilingMat = tiled('castle_brick_07', W + 2, D + 2, 4);
+  ceilingMat.color.set('#55505e');
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(W + 2, D + 2), ceilingMat);
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.position.y = H;
+  group.add(ceiling);
 
-function buildLamp(p: Prop): THREE.Group {
-  const g = new THREE.Group();
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.2, 8), mats.metal());
-  post.position.y = 1.6;
-  const lantern = new THREE.Mesh(
-    new THREE.BoxGeometry(0.42, 0.55, 0.42),
-    toonMaterial({ color: '#fff1c4', emissive: '#ffcf6b', emissiveIntensity: 1.6 }),
-  );
-  lantern.position.y = 3.4;
-  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.38, 0.3, 4), mats.metal());
-  cap.rotation.y = Math.PI / 4;
-  cap.position.y = 3.82;
-  g.add(post, lantern, cap);
-  g.position.set(p.x, 0, p.z);
-  shadowAll(g);
-  return g;
-}
-
-function buildFountain(p: Prop): THREE.Group {
-  const g = new THREE.Group();
-  const basin = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.4, 0.7, 24), mats.stone());
-  basin.position.y = 0.35;
-  const water = new THREE.Mesh(
-    new THREE.CircleGeometry(1.95, 24),
-    toonMaterial({ color: '#6cc6ff', emissive: '#2c8fd6', emissiveIntensity: 0.4, outline: 0 }),
-  );
-  water.rotation.x = -Math.PI / 2;
-  water.position.y = 0.66;
-  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 1.8, 10), mats.stone());
-  column.position.y = 1.2;
-  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.4, 0.35, 16), mats.stone());
-  bowl.position.y = 2.1;
-  g.add(basin, water, column, bowl);
-  g.position.set(p.x, 0, p.z);
-  shadowAll(g);
-  return g;
-}
-
-function buildTree(p: Prop): THREE.Group {
-  const r = seeded(p.seed + 11);
-  const g = new THREE.Group();
-  const s = p.size;
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18 * s, 0.3 * s, 2.4 * s, 7), mats.wood());
-  trunk.position.y = 1.2 * s;
-  g.add(trunk);
-  const greens = ['#4f9a3e', '#5aa847', '#3f8a3a', '#6bb24f'];
-  const layers = 2 + Math.floor(r() * 2);
-  for (let i = 0; i < layers; i++) {
-    const blob = new THREE.Mesh(
-      new THREE.IcosahedronGeometry((1.5 - i * 0.3) * s, 0),
-      toonMaterial({ color: greens[Math.floor(r() * greens.length)]! }),
+  map.props.forEach((p, i) => {
+    if (p.kind !== 'pillar') return;
+    jobs.push(
+      // The brazier is on the pillar's +X side; turn the right-hand row to face the aisle too.
+      place('BossPillar', { ...p, rot: p.x > 0 ? Math.PI : 0 }, group).then((pillar) => {
+        const at = pillar.localToWorld(marker(pillar, 'Pillar_Flame'));
+        const flame = brazierFlame(i);
+        flame.position.copy(at);
+        group.add(flame);
+        animated.push(flame.userData as { update(t: number): void });
+        // Light every other brazier; fragment cost grows with each point light.
+        if (i % 2 === 0) {
+          const light = new THREE.PointLight('#ff9a4a', 30, 18, 1.6);
+          light.position.copy(at).add(new THREE.Vector3(0, 0.4, 0));
+          group.add(light);
+          const base = light.intensity;
+          animated.push({ update: (t) => (light.intensity = base * (0.85 + 0.15 * Math.sin(t * 9 + i) * Math.sin(t * 5.3 + i * 2))) });
+        }
+      }),
     );
-    blob.position.set((r() - 0.5) * 0.5 * s, (2.6 + i * 1.0) * s, (r() - 0.5) * 0.5 * s);
-    blob.rotation.set(r() * 3, r() * 3, r() * 3);
-    g.add(blob);
+  });
+}
+
+// ---- Props -----------------------------------------------------------------------------------
+
+async function place(name: PropName, p: Prop, group: THREE.Group): Promise<THREE.Object3D> {
+  const o = await prop(name);
+  o.position.set(p.x, 0, p.z);
+  o.rotation.y = p.rot;
+  group.add(o);
+  o.updateMatrixWorld(true);
+  return o;
+}
+
+async function addGate(p: Prop, group: THREE.Group, animated: { update(t: number): void }[]): Promise<void> {
+  const gate: Gate = await teleportGate(gltfLoader);
+  gate.group.position.set(p.x, 0, p.z);
+  gate.group.rotation.y = p.rot;
+  group.add(gate.group);
+  animated.push(gate);
+}
+
+/** Houses come in a few variants (size, style, storeys, window pattern); each is built once and instanced. */
+async function addHouses(houses: Prop[], group: THREE.Group): Promise<void> {
+  const variants = new Map<string, { size: 4 | 6; style: HouseStyle; seed: number; floors: number; at: THREE.Matrix4[] }>();
+  for (const p of houses) {
+    const size = p.w === 4 ? 4 : 6;
+    const style: HouseStyle = p.seed % 3 === 0 ? 'brick' : 'plaster';
+    const seed = p.seed % 2;
+    const floors = p.size >= 3 ? 3 : 2;
+    const key = `${size}-${style}-${seed}-${floors}`;
+    const v = variants.get(key) ?? { size, style, seed, floors, at: [] };
+    v.at.push(placeAt(p.x, p.z, p.rot));
+    variants.set(key, v);
   }
-  g.position.set(p.x, 0, p.z);
-  g.rotation.y = p.rot;
-  shadowAll(g);
-  return g;
-}
-
-function buildRock(p: Prop): THREE.Mesh {
-  const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1.0 * p.size, 0), toonMaterial({ color: '#8d8a93' }));
-  rock.scale.y = 0.65;
-  rock.position.set(p.x, 0.35 * p.size, p.z);
-  rock.rotation.y = p.rot;
-  rock.castShadow = rock.receiveShadow = true;
-  return rock;
-}
-
-function buildPillar(p: Prop): THREE.Group {
-  const g = new THREE.Group();
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.85, 12, 10), mats.darkStone());
-  shaft.position.y = 6;
-  const base = new THREE.Mesh(new THREE.BoxGeometry(2, 0.6, 2), mats.darkStone());
-  base.position.y = 0.3;
-  g.add(shaft, base);
-  // Torch with a real light on every other pillar.
-  const torch = new THREE.Mesh(
-    new THREE.ConeGeometry(0.22, 0.5, 6),
-    toonMaterial({ color: '#ffb347', emissive: '#ff7b1a', emissiveIntensity: 2.5, outline: 0 }),
+  await Promise.all(
+    [...variants.values()].map(async (v) => {
+      const template = await villageHouse(v.size, v.style, v.seed, v.floors);
+      group.add(instances(template, v.at));
+    }),
   );
-  const inward = p.x < 0 ? 1 : -1;
-  torch.position.set(inward * 0.95, 3.2, 0);
-  torch.rotation.z = Math.PI;
-  g.add(torch);
-  if (p.seed % 2 === 0) {
-    const light = new THREE.PointLight('#ff9a4a', 18, 16, 1.6);
-    light.position.set(inward * 1.3, 3.2, 0);
-    g.add(light);
-  }
-  g.position.set(p.x, 0, p.z);
-  shadowAll(g);
-  return g;
 }
 
-export interface WorldView {
-  group: THREE.Group;
-  update(time: number): void;
-  dispose(): void;
+const ROCKS = ['boulder_01', 'rock_moss_set_01'];
+async function addRock(p: Prop, group: THREE.Group): Promise<void> {
+  const rock = await polyModel(ROCKS[p.seed % ROCKS.length]!);
+  const box = new THREE.Box3().setFromObject(rock);
+  const footprint = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+  // Match the collider (radius 0.9 * size) with a little overhang.
+  rock.scale.setScalar((0.9 * p.size * 2.2) / footprint);
+  rock.position.set(p.x, 0, p.z);
+  rock.rotation.y = p.rot;
+  group.add(rock);
 }
+
+async function scatterPlants(group: THREE.Group, avoid: Prop[], name: string, count: number, scale: [number, number], seed: number): Promise<void> {
+  const r = seeded(seed);
+  for (let i = 0; i < count; i++) {
+    const a = r() * Math.PI * 2;
+    const d = 6 + r() * 70;
+    const x = Math.sin(a) * d;
+    const z = Math.cos(a) * d;
+    const s = scale[0] + r() * (scale[1] - scale[0]);
+    const rot = r() * Math.PI * 2;
+    if (avoid.some((p) => Math.hypot(x - p.x, z - p.z) < p.size * 1.2 + 0.5)) continue;
+    const o = await polyModel(name);
+    o.position.set(x, 0, z);
+    o.rotation.y = rot;
+    o.scale.setScalar(s);
+    group.add(o);
+  }
+}
+
+// ---- Effects -----------------------------------------------------------------------------------
+
+let flameTexture: THREE.CanvasTexture | null = null;
+function flameMap(): THREE.CanvasTexture {
+  if (flameTexture) return flameTexture;
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 128;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(32, 92, 2, 32, 80, 52);
+  grad.addColorStop(0, 'rgba(255,240,200,1)');
+  grad.addColorStop(0.25, 'rgba(255,170,60,0.95)');
+  grad.addColorStop(0.6, 'rgba(230,80,20,0.45)');
+  grad.addColorStop(1, 'rgba(120,20,0,0)');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(32, 2);
+  g.bezierCurveTo(60, 60, 64, 110, 32, 126);
+  g.bezierCurveTo(0, 110, 4, 60, 32, 2);
+  g.fill();
+  flameTexture = new THREE.CanvasTexture(c);
+  flameTexture.colorSpace = THREE.SRGBColorSpace;
+  return flameTexture;
+}
+
+/** A flickering fire sprite for a brazier; userData.update animates it. */
+function brazierFlame(seed: number): THREE.Sprite {
+  const mat = new THREE.SpriteMaterial({ map: flameMap(), color: new THREE.Color(2.2, 1.6, 1.1), blending: THREE.AdditiveBlending, depthWrite: false });
+  const s = new THREE.Sprite(mat);
+  s.center.set(0.5, 0.05);
+  s.scale.set(0.45, 0.9, 1);
+  s.userData = {
+    update(t: number) {
+      const f = 0.9 + 0.1 * Math.sin(t * 13 + seed) + 0.06 * Math.sin(t * 29 + seed * 3);
+      s.scale.set(0.45 * (2 - f), 0.9 * f, 1);
+    },
+  };
+  return s;
+}
+
+// ---- Entry -------------------------------------------------------------------------------------
 
 export function buildWorld(map: MapDef): WorldView {
   const group = new THREE.Group();
-  const animated: THREE.ShaderMaterial[] = [];
-
-  // Ground.
-  if (map.ground === 'stone') {
-    const b = map.bounds.kind === 'rect' ? map.bounds : { halfX: 30, halfZ: 30 };
-    const floorTex = noiseTexture('#57525f', ['#4a4652', '#625d6b', '#433f4b'], 256, 1600, 9, 8);
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(b.halfX * 2, b.halfZ * 2), toonMaterial({ map: floorTex, outline: 0 }));
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    group.add(floor);
-    const wallMat = toonMaterial({ color: '#3f3a48', outline: 0 });
-    const H = 14;
-    const walls: [number, number, number, number][] = [
-      [0, -b.halfZ - 0.5, b.halfX * 2 + 2, 1],
-      [0, b.halfZ + 0.5, b.halfX * 2 + 2, 1],
-      [-b.halfX - 0.5, 0, 1, b.halfZ * 2],
-      [b.halfX + 0.5, 0, 1, b.halfZ * 2],
-    ];
-    for (const [x, z, w, d] of walls) {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, H, d), wallMat);
-      wall.position.set(x, H / 2, z);
-      wall.receiveShadow = true;
-      group.add(wall);
-    }
-    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(b.halfX * 2 + 2, b.halfZ * 2 + 2), toonMaterial({ color: '#25212b', outline: 0 }));
-    ceiling.rotation.x = Math.PI / 2;
-    ceiling.position.y = H;
-    group.add(ceiling);
-  } else {
-    const grassTex = noiseTexture('#6da84f', ['#5f9a43', '#7bb85a', '#58903e', '#86c063'], 256, 2200, 4, 60);
-    const grass = new THREE.Mesh(new THREE.CircleGeometry(400, 64), toonMaterial({ map: grassTex, outline: 0 }));
-    grass.rotation.x = -Math.PI / 2;
-    grass.receiveShadow = true;
-    group.add(grass);
-    if (map.ground === 'plaza') {
-      const plazaR = 27;
-      const plaza = new THREE.Mesh(new THREE.CircleGeometry(plazaR, 64), toonMaterial({ map: plazaTexture(), outline: 0 }));
-      plaza.rotation.x = -Math.PI / 2;
-      plaza.position.y = 0.02;
-      plaza.receiveShadow = true;
-      group.add(plaza);
-      // Streets out through the gaps in the building ring.
-      const streetTex = noiseTexture('#a89f90', ['#988f80', '#b6ad9e'], 128, 500, 5, 4);
-      for (let i = 0; i < 4; i++) {
-        const street = new THREE.Mesh(new THREE.PlaneGeometry(7, 20), toonMaterial({ map: streetTex, outline: 0 }));
-        street.rotation.x = -Math.PI / 2;
-        const a = (i * Math.PI) / 2;
-        street.rotation.z = a;
-        street.position.set(Math.sin(a) * 34, 0.015, Math.cos(a) * 34);
-        street.receiveShadow = true;
-        group.add(street);
-      }
-    }
-    if (map.bounds.kind === 'circle') {
-      // A low ring of hedges/rocks marks the edge of the walkable area.
-      const r = map.bounds.r;
-      const n = Math.floor(r * 1.2);
-      const edgeMat = toonMaterial({ color: map.ground === 'plaza' ? '#4f8a3d' : '#7c7a82' });
-      for (let i = 0; i < n; i++) {
-        const a = (i / n) * Math.PI * 2;
-        const m = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1, 0), edgeMat);
-        m.position.set(Math.sin(a) * (r + 0.6), 0.5, Math.cos(a) * (r + 0.6));
-        m.rotation.set(i, i * 2, i * 3);
-        m.castShadow = true;
-        group.add(m);
-      }
-    }
+  const jobs: Promise<unknown>[] = [];
+  const animated: { update(t: number): void }[] = [];
+  if (map.ground === 'stone') buildBossRoom(map, group, jobs, animated);
+  else {
+    if (map.ground === 'plaza') buildTown(map, group, jobs, animated);
+    else buildField(map, group, jobs, animated);
+    // Placed trees share the variants' materials, so animating the variants sways them all.
+    animated.push({ update: (t) => variants().forEach((v) => v.tree.update(t)) });
   }
-
-  for (const p of map.props) {
-    switch (p.kind) {
-      case 'gate': {
-        const gate = buildGate();
-        gate.group.position.set(p.x, 0, p.z);
-        gate.group.rotation.y = p.rot;
-        animated.push(gate.portal);
-        group.add(gate.group);
-        break;
-      }
-      case 'building':
-        group.add(buildBuilding(p));
-        break;
-      case 'lamp':
-        group.add(buildLamp(p));
-        break;
-      case 'fountain':
-        group.add(buildFountain(p));
-        break;
-      case 'tree':
-        group.add(buildTree(p));
-        break;
-      case 'rock':
-        group.add(buildRock(p));
-        break;
-      case 'pillar':
-        group.add(buildPillar(p));
-        break;
-    }
-  }
+  const ready = Promise.allSettled(jobs).then((results) => {
+    for (const r of results) if (r.status === 'rejected') console.warn('world model failed to load (run npm run fetch-lookdev-assets?)', r.reason);
+  });
 
   return {
     group,
+    ready,
     update(time) {
-      for (const m of animated) m.uniforms.time!.value = time;
+      propTime.value = time;
+      for (const a of animated) a.update(time);
     },
     dispose() {
       group.traverse((o) => {
         const m = o as THREE.Mesh;
-        if (m.isMesh) {
-          m.geometry.dispose();
-          const mat = m.material;
-          (Array.isArray(mat) ? mat : [mat]).forEach((x) => x.dispose());
-        }
+        if (m.isMesh) m.geometry.dispose();
       });
     },
   };

@@ -17,6 +17,10 @@ export const MOVE = {
   jumpSpeed: 8.2,
   /** Radians per second the character turns toward its movement direction. */
   turnRate: 14,
+  /** Highest ledge a character walks up without jumping (the gate's steps are 0.32 m). */
+  stepUp: 0.4,
+  /** Largest drop a walking character follows down instead of falling. */
+  stepDown: 0.4,
 } as const;
 
 export interface MoveState {
@@ -79,9 +83,18 @@ function wrapAngle(a: number): number {
   return a;
 }
 
-function approach(v: number, target: number, maxStep: number): number {
-  if (v < target) return Math.min(v + maxStep, target);
-  return Math.max(v - maxStep, target);
+/** Move velocity (vx, vz) toward the target by at most maxStep, as a vector (keeps its direction). */
+function approach(s: MoveState, tx: number, tz: number, maxStep: number): void {
+  const dx = tx - s.vx;
+  const dz = tz - s.vz;
+  const d = Math.hypot(dx, dz);
+  if (d <= maxStep) {
+    s.vx = tx;
+    s.vz = tz;
+  } else {
+    s.vx += (dx / d) * maxStep;
+    s.vz += (dz / d) * maxStep;
+  }
 }
 
 /** Push a circle at (x, z) out of the map's colliders and bounds. Returns the corrected position. */
@@ -103,28 +116,39 @@ export function resolveCollisions(map: MapDef, x: number, z: number, radius: num
       }
     }
     for (const b of map.boxes) {
-      const cx = Math.max(b.minX, Math.min(x, b.maxX));
-      const cz = Math.max(b.minZ, Math.min(z, b.maxZ));
-      const ox = x - cx;
-      const oz = z - cz;
+      // Work in the box's own frame: centre at the origin, unrotated.
+      const bx = (b.minX + b.maxX) / 2;
+      const bz = (b.minZ + b.maxZ) / 2;
+      const hx = (b.maxX - b.minX) / 2;
+      const hz = (b.maxZ - b.minZ) / 2;
+      const cos = b.rot ? Math.cos(b.rot) : 1;
+      const sin = b.rot ? Math.sin(b.rot) : 0;
+      // World -> local is a rotation by -rot (three.js rotation.y maps local (x, z) to
+      // (x cos + z sin, -x sin + z cos)).
+      const wx = x - bx;
+      const wz = z - bz;
+      let lx = wx * cos - wz * sin;
+      let lz = wx * sin + wz * cos;
+      const cx = Math.max(-hx, Math.min(lx, hx));
+      const cz = Math.max(-hz, Math.min(lz, hz));
+      const ox = lx - cx;
+      const oz = lz - cz;
       const d2 = ox * ox + oz * oz;
       if (d2 >= radius * radius) continue;
       if (d2 > 1e-12) {
         const d = Math.sqrt(d2);
-        x = cx + (ox / d) * radius;
-        z = cz + (oz / d) * radius;
+        lx = cx + (ox / d) * radius;
+        lz = cz + (oz / d) * radius;
       } else {
         // Centre inside the box: leave by the nearest side.
-        const left = x - b.minX;
-        const right = b.maxX - x;
-        const back = z - b.minZ;
-        const front = b.maxZ - z;
-        const m = Math.min(left, right, back, front);
-        if (m === left) x = b.minX - radius;
-        else if (m === right) x = b.maxX + radius;
-        else if (m === back) z = b.minZ - radius;
-        else z = b.maxZ + radius;
+        const m = Math.min(lx + hx, hx - lx, lz + hz, hz - lz);
+        if (m === lx + hx) lx = -hx - radius;
+        else if (m === hx - lx) lx = hx + radius;
+        else if (m === lz + hz) lz = -hz - radius;
+        else lz = hz + radius;
       }
+      x = bx + lx * cos + lz * sin;
+      z = bz - lx * sin + lz * cos;
     }
   }
   const bounds = map.bounds;
@@ -142,6 +166,27 @@ export function resolveCollisions(map: MapDef, x: number, z: number, radius: num
   return { x, z };
 }
 
+/** Height of the walkable floor at (x, z): the highest platform under that point, else 0. */
+export function groundHeight(map: MapDef, x: number, z: number): number {
+  let h = 0;
+  for (const p of map.platforms) {
+    if (p.top > h && x >= p.minX && x <= p.maxX && z >= p.minZ && z <= p.maxZ) h = p.top;
+  }
+  return h;
+}
+
+/** Collide, then refuse moves onto floor too high to step up to (sliding along one axis if it can). */
+function moveTo(map: MapDef, s: MoveState, nx: number, nz: number): { x: number; z: number } {
+  const limit = s.y + MOVE.stepUp;
+  const tries = [
+    resolveCollisions(map, nx, nz, MOVE.radius),
+    resolveCollisions(map, nx, s.z, MOVE.radius),
+    resolveCollisions(map, s.x, nz, MOVE.radius),
+  ];
+  for (const t of tries) if (groundHeight(map, t.x, t.z) <= limit) return t;
+  return { x: s.x, z: s.z };
+}
+
 /** Advance one fixed tick. Mutates and returns `s`. */
 export function stepMovement(s: MoveState, input: MoveInput, map: MapDef, dt: number = TICK_DT): MoveState {
   const len = Math.hypot(input.dx, input.dz);
@@ -153,28 +198,16 @@ export function stepMovement(s: MoveState, input: MoveInput, map: MapDef, dt: nu
 
   if (s.grounded) {
     const accel = len > 1e-4 ? MOVE.groundAccel : MOVE.groundDecel;
-    s.vx = approach(s.vx, targetVx, accel * dt);
-    s.vz = approach(s.vz, targetVz, accel * dt);
+    approach(s, targetVx, targetVz, accel * dt);
     if (input.jump) {
       s.vy = MOVE.jumpSpeed;
       s.grounded = false;
     }
   } else {
-    s.vx = approach(s.vx, targetVx, MOVE.airAccel * dt);
-    s.vz = approach(s.vz, targetVz, MOVE.airAccel * dt);
+    approach(s, targetVx, targetVz, MOVE.airAccel * dt);
   }
 
-  if (!s.grounded) {
-    s.vy -= MOVE.gravity * dt;
-    s.y += s.vy * dt;
-    if (s.y <= 0) {
-      s.y = 0;
-      s.vy = 0;
-      s.grounded = true;
-    }
-  }
-
-  const moved = resolveCollisions(map, s.x + s.vx * dt, s.z + s.vz * dt, MOVE.radius);
+  const moved = moveTo(map, s, s.x + s.vx * dt, s.z + s.vz * dt);
   // Lose the velocity that went into walls, so sliding along them feels right.
   if (dt > 0) {
     s.vx = (moved.x - s.x) / dt;
@@ -182,6 +215,22 @@ export function stepMovement(s: MoveState, input: MoveInput, map: MapDef, dt: nu
   }
   s.x = moved.x;
   s.z = moved.z;
+
+  const ground = groundHeight(map, s.x, s.z);
+  if (s.grounded) {
+    // Walk up steps, follow small drops down, fall off anything taller.
+    if (ground >= s.y - MOVE.stepDown) s.y = ground;
+    else s.grounded = false;
+  }
+  if (!s.grounded) {
+    s.vy -= MOVE.gravity * dt;
+    s.y += s.vy * dt;
+    if (s.y <= ground) {
+      s.y = ground;
+      s.vy = 0;
+      s.grounded = true;
+    }
+  }
 
   if (len > 1e-4) {
     const want = Math.atan2(dirX, dirZ);

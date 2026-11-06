@@ -12,3 +12,7 @@ client/public/assets/village/
 client/public/assets/vrm/
 client/public/assets/anim/
 client/public/assets/polyhaven/
+
+# Blender backups and the build scripts' bytecode
+*.blend1
+__pycache__/

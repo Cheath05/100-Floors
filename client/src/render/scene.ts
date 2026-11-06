@@ -1,31 +1,18 @@
-// Renderer, camera, lights, sky with the underside of the floor above, and the post-processing chain
-// (scene + ink outlines -> bloom -> output).
+// Renderer, camera, lights and post-processing in the look-test style: physically based materials
+// lit by a sun and an HDRI sky, neutral tone mapping (keeps saturated anime colour), ambient
+// occlusion, bloom and a light colour grade. Dungeons swap the sky for darkness and torchlight.
+// URL options: ?ao=0 turns ambient occlusion off.
 import * as THREE from 'three';
-import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { Pass } from 'three/addons/postprocessing/Pass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { noiseTexture, setOutline } from './toon';
-
-/** Renders the scene plus OutlineEffect's inverted-hull ink lines into the composer's buffer. */
-class OutlineRenderPass extends Pass {
-  constructor(
-    private scene: THREE.Scene,
-    private camera: THREE.Camera,
-    private effect: OutlineEffect,
-  ) {
-    super();
-    this.needsSwap = false;
-  }
-
-  override render(renderer: THREE.WebGLRenderer, _write: THREE.WebGLRenderTarget, read: THREE.WebGLRenderTarget): void {
-    renderer.setRenderTarget(this.renderToScreen ? null : read);
-    renderer.clear();
-    this.effect.render(this.scene, this.camera);
-  }
-}
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { PH } from './assets';
+import { floorAbove, mountains } from './dressing';
 
 export interface SceneKit {
   renderer: THREE.WebGLRenderer;
@@ -40,56 +27,38 @@ export interface SceneKit {
   setAmbience(kind: 'day' | 'dungeon'): void;
 }
 
-const SKY_TOP = new THREE.Color('#5ea4e6');
-const SKY_HORIZON = new THREE.Color('#d9ecf7');
+const HAZE = new THREE.Color('#bcd0e2');
+const DARK = new THREE.Color('#0b0a10');
 
-function makeSky(scene: THREE.Scene): THREE.Group {
-  const group = new THREE.Group();
-  const skyGeo = new THREE.SphereGeometry(900, 32, 16);
-  const skyMat = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    depthWrite: false,
-    fog: false,
-    uniforms: { top: { value: SKY_TOP }, horizon: { value: SKY_HORIZON } },
-    vertexShader: 'varying vec3 vPos; void main(){ vPos = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-    fragmentShader:
-      'uniform vec3 top; uniform vec3 horizon; varying vec3 vPos; void main(){ float h = clamp(normalize(vPos).y * 1.6, 0.0, 1.0); gl_FragColor = vec4(mix(horizon, top, h), 1.0); }',
+/** Anime-fantasy grade: a little more saturation and warmth, gentle contrast, soft vignette. */
+function gradePass(): ShaderPass {
+  return new ShaderPass({
+    uniforms: { tDiffuse: { value: null }, saturation: { value: 1.06 }, contrast: { value: 1.05 }, warmth: { value: 0.035 }, vignette: { value: 0.28 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: `uniform sampler2D tDiffuse; uniform float saturation; uniform float contrast; uniform float warmth; uniform float vignette; varying vec2 vUv;
+      void main(){
+        vec4 c = texture2D(tDiffuse, vUv);
+        float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+        c.rgb = mix(vec3(l), c.rgb, saturation);
+        c.rgb = (c.rgb - 0.5) * contrast + 0.5;
+        c.rgb += vec3(warmth, warmth * 0.4, -warmth);
+        float d = distance(vUv, vec2(0.5));
+        c.rgb *= 1.0 - vignette * smoothstep(0.45, 0.85, d);
+        gl_FragColor = vec4(clamp(c.rgb, 0.0, 1.0), c.a);
+      }`,
   });
-  setOutline(skyMat, 0);
-  group.add(new THREE.Mesh(skyGeo, skyMat));
-
-  // The underside of the floor above: a vast stone ceiling with the sky only visible at the rim.
-  const ceilingTex = noiseTexture('#4b4855', ['#3c3946', '#5a5766', '#35323e', '#625e6e'], 512, 5000, 3, 6);
-  const ceiling = new THREE.Mesh(
-    new THREE.CircleGeometry(620, 64),
-    new THREE.MeshBasicMaterial({ map: ceilingTex, side: THREE.DoubleSide, fog: true }),
-  );
-  setOutline(ceiling.material, 0);
-  ceiling.rotation.x = Math.PI / 2;
-  ceiling.position.y = 160;
-  group.add(ceiling);
-  // Giant support columns far out at the floor's edge.
-  const colMat = new THREE.MeshLambertMaterial({ color: '#7d7a86' });
-  setOutline(colMat, 0);
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2;
-    const col = new THREE.Mesh(new THREE.CylinderGeometry(14, 18, 170, 12), colMat);
-    col.position.set(Math.sin(a) * 430, 80, Math.cos(a) * 430);
-    group.add(col);
-  }
-  scene.add(group);
-  return group;
 }
 
 export function createScene(container: HTMLElement): SceneKit {
+  const params = new URLSearchParams(location.search);
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NeutralToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.3;
   container.appendChild(renderer.domElement);
 
   const labels = new CSS2DRenderer();
@@ -98,32 +67,58 @@ export function createScene(container: HTMLElement): SceneKit {
   container.appendChild(labels.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(SKY_HORIZON, 90, 520);
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+  scene.background = HAZE.clone();
+  scene.fog = new THREE.Fog(HAZE, 110, 720);
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2500);
 
-  const hemi = new THREE.HemisphereLight('#dfefff', '#6b7a4a', 1.4);
+  // Fill light until the HDRI arrives (and the only fill in dungeons, which have no sky).
+  const hemi = new THREE.HemisphereLight('#dfefff', '#6b7a4a', 0.6);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight('#fff4e0', 2.4);
-  sun.position.set(30, 60, 20);
+  const sun = new THREE.DirectionalLight('#ffe9c8', 3.4);
+  const SUN_OFFSET = new THREE.Vector3(-18, 26, 14);
+  sun.position.copy(SUN_OFFSET);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  const sc = sun.shadow.camera;
-  sc.left = sc.bottom = -40;
-  sc.right = sc.top = 40;
-  sc.near = 1;
-  sc.far = 160;
-  sun.shadow.bias = -0.0005;
-  sun.shadow.normalBias = 0.03;
+  Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, near: 1, far: 90 });
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.04;
   scene.add(sun, sun.target);
 
-  const sky = makeSky(scene);
+  // Far scenery for outdoor maps: mountains on the horizon and the underside of the floor above.
+  const scenery = new THREE.Group();
+  scenery.add(mountains(470), floorAbove(380, 1400));
+  scene.add(scenery);
 
-  const outline = new OutlineEffect(renderer, { defaultThickness: 0.004, defaultColor: [0.08, 0.06, 0.1] });
+  let sky: THREE.Texture | null = null;
+  let dungeon = false;
+  const applySky = () => {
+    if (dungeon || !sky) return;
+    scene.background = sky;
+    scene.environment = sky;
+    scene.environmentIntensity = 0.9;
+    hemi.intensity = 0;
+  };
+  new HDRLoader()
+    .loadAsync(`${PH}/hdri/kloofendal_48d_partly_cloudy_puresky_2k.hdr`)
+    .then((hdr) => {
+      hdr.mapping = THREE.EquirectangularReflectionMapping;
+      sky = hdr;
+      applySky();
+    })
+    .catch((err: unknown) => console.warn('could not load the sky (run npm run fetch-lookdev-assets?)', err));
+
   const composer = new EffectComposer(renderer);
-  composer.addPass(new OutlineRenderPass(scene, camera, outline));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.45, 0.88);
+  composer.addPass(new RenderPass(scene, camera));
+  if (params.get('ao') !== '0') {
+    const ao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
+    ao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.5, thickness: 1, scale: 1 });
+    ao.blendIntensity = 0.85;
+    composer.addPass(ao);
+  }
+  const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.25, 0.5, 0.95);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  composer.addPass(gradePass());
 
   const kit: SceneKit = {
     renderer,
@@ -146,26 +141,34 @@ export function createScene(container: HTMLElement): SceneKit {
     },
     followShadow(x, z) {
       sun.target.position.set(x, 0, z);
-      sun.position.set(x + 30, 60, z + 20);
+      sun.position.set(x + SUN_OFFSET.x, SUN_OFFSET.y, z + SUN_OFFSET.z);
     },
     setAmbience(kind) {
-      if (kind === 'dungeon') {
-        sky.visible = false;
-        scene.background = new THREE.Color('#0d0b12');
-        scene.fog = new THREE.Fog('#0d0b12', 25, 90);
-        hemi.intensity = 0.55;
-        hemi.color.set('#8c86b8');
-        sun.intensity = 0.6;
+      dungeon = kind === 'dungeon';
+      scenery.visible = !dungeon;
+      if (dungeon) {
+        scene.background = DARK;
+        scene.environment = null;
+        scene.fog = new THREE.Fog(DARK, 20, 75);
+        hemi.intensity = 1.1;
+        hemi.color.set('#a9a2d6');
+        hemi.groundColor.set('#3a3040');
+        sun.intensity = 0.4;
+        bloom.strength = 0.6;
       } else {
-        sky.visible = true;
-        scene.background = null;
-        scene.fog = new THREE.Fog(SKY_HORIZON, 90, 520);
-        hemi.intensity = 1.4;
+        scene.background = HAZE.clone();
+        scene.fog = new THREE.Fog(HAZE, 110, 720);
+        hemi.intensity = 0.6;
         hemi.color.set('#dfefff');
-        sun.intensity = 2.4;
+        hemi.groundColor.set('#6b7a4a');
+        sun.intensity = 3.4;
+        bloom.strength = 0.25;
+        applySky();
       }
     },
   };
   window.addEventListener('resize', () => kit.resize());
+  // Size every pass in device pixels (GTAOPass is built at CSS size, which is wrong on HiDPI screens).
+  kit.resize();
   return kit;
 }

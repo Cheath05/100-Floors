@@ -12,11 +12,12 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { VRMLoaderPlugin, VRMUtils, type VRM } from '@pixiv/three-vrm';
 import { Tree } from '@dgreenheck/ez-tree';
-import { retargetClip } from './retarget';
-import { teleportGate, type Gate } from './gate';
-import { createGrass } from './grass';
-import { dressDuelist, dressVanguard } from './outfits';
-import { banner, barrel, floorAbove, lampPost, marketStall, mountains, planter } from './props';
+import { retargetClip } from '../render/retarget';
+import { teleportGate, type Gate } from '../render/gate';
+import { createGrass } from '../render/grass';
+import { villageHouse, type HouseStyle } from '../render/assets';
+import { dressDuelist, dressVanguard } from '../render/outfits';
+import { banner, barrel, floorAbove, lampPost, marketStall, mountains, planter } from '../render/dressing';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 const params = new URL(location.href).searchParams;
@@ -135,48 +136,8 @@ async function place(name: string, parent: THREE.Object3D, x: number, y: number,
 }
 
 /** A 4 m x 4 m (or 6 x 6) two-storey house from modular pieces. */
-async function house(x: number, z: number, rotY: number, size: 4 | 6, style: 'plaster' | 'brick', seed: number): Promise<void> {
-  const g = new THREE.Group();
-  const half = size / 2;
-  const H = 3.12;
-  const floors = 2;
-  const jobs: Promise<void>[] = [];
-  const sides: { dx: number; dz: number; rot: number }[] = [
-    { dx: 0, dz: 1, rot: 0 },
-    { dx: 1, dz: 0, rot: Math.PI / 2 },
-    { dx: 0, dz: -1, rot: Math.PI },
-    { dx: -1, dz: 0, rot: -Math.PI / 2 },
-  ];
-  const segs = size / 2;
-  for (let f = 0; f < floors; f++) {
-    sides.forEach((s, si) => {
-      for (let i = 0; i < segs; i++) {
-        const along = -half + 1 + i * 2;
-        const px = s.dx !== 0 ? s.dx * half : along;
-        const pz = s.dz !== 0 ? s.dz * half : along;
-        let piece: string;
-        const ground = f === 0;
-        if (ground && si === 0 && i === Math.floor(segs / 2)) piece = style === 'brick' ? 'Wall_UnevenBrick_Door_Round' : 'Wall_Plaster_Door_Round';
-        else if (ground) piece = style === 'brick' ? ((i + seed) % 2 ? 'Wall_UnevenBrick_Window_Wide_Round' : 'Wall_UnevenBrick_Straight') : (i + seed) % 2 ? 'Wall_Plaster_Window_Wide_Round' : 'Wall_Plaster_Straight';
-        else piece = (i + si + seed) % 2 ? 'Wall_Plaster_Window_Wide_Flat' : 'Wall_Plaster_WoodGrid';
-        jobs.push(place(piece, g, px, f * H, pz, s.rot));
-      }
-    });
-    for (const [cx, cz] of [
-      [half, half],
-      [half, -half],
-      [-half, half],
-      [-half, -half],
-    ] as const) {
-      jobs.push(place(style === 'brick' && f === 0 ? 'Corner_Exterior_Brick' : 'Corner_Exterior_Wood', g, cx, f * H, cz, Math.atan2(cx, cz) - Math.PI / 4));
-    }
-  }
-  jobs.push(place(size === 4 ? 'Roof_RoundTiles_4x4' : 'Roof_RoundTiles_6x6', g, 0, floors * H, 0, 0));
-  const gable = size === 4 ? 'Roof_Front_Brick4' : 'Roof_Front_Brick6';
-  jobs.push(place(gable, g, 0, floors * H, half, 0));
-  jobs.push(place(gable, g, 0, floors * H, -half, Math.PI));
-  jobs.push(place('Prop_Chimney', g, half - 0.8, floors * H + 1.2, -half + 1, 0));
-  await Promise.all(jobs);
+async function house(x: number, z: number, rotY: number, size: 4 | 6, style: HouseStyle, seed: number): Promise<void> {
+  const g = await villageHouse(size, style, seed);
   g.position.set(x, 0, z);
   g.rotation.y = rotY;
   scene.add(g);

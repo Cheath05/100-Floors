@@ -137,7 +137,7 @@ export async function teleportGate(loader: GLTFLoader): Promise<Gate> {
   g.traverse((o) => {
     if (!(o instanceof THREE.Mesh)) return;
     const mats = (Array.isArray(o.material) ? o.material : [o.material]) as THREE.MeshStandardMaterial[];
-    if (mats.some((m) => m.name === 'GateInlay')) {
+    if (mats.some((m) => m.name === 'GlowBlue')) {
       // The diamond inlays glow past the tone mapper so bloom picks them up.
       o.material = inlay;
       return;

@@ -1,86 +1,116 @@
-// Player avatars: KayKit characters (CC0, Kay Lousberg) cloned per player, toon-shaded, animated.
+// Player avatars: VRM anime characters (VRoid samples, MToon) with real-world proportions, dressed
+// in our original outfits and armor, holding a katana, animated with Quaternius' Universal
+// Animation Library retargeted onto each VRM. Each player loads their own VRM (spring bones and
+// expressions don't survive cloning); the files are cached by the browser after the first one.
 import * as THREE from 'three';
-import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { VRMLoaderPlugin, VRMUtils, type VRM } from '@pixiv/three-vrm';
 import { Anim, STARTER_MODELS } from '@floors/shared';
-import { toonMaterial, toonify } from './toon';
+import { gltfLoader, PH } from './assets';
+import { dressDuelist, dressVanguard } from './outfits';
+import { retargetClip } from './retarget';
 
-const BASE = '/assets/kaykit/adventurers/characters/';
-const TARGET_HEIGHT = 1.75;
+const vrmLoader = new GLTFLoader();
+vrmLoader.register((parser) => new VRMLoaderPlugin(parser));
 
-/** Which clip plays for each movement state. */
-const CLIPS: Record<number, string> = {
-  [Anim.Idle]: 'Idle',
-  [Anim.Walk]: 'Walking_A',
-  [Anim.Run]: 'Running_A',
-  [Anim.Sprint]: 'Running_B',
-  [Anim.Air]: 'Jump_Idle',
+interface Look {
+  file: string;
+  dress?: (vrm: VRM) => void;
+}
+/** One entry per STARTER_MODELS name. */
+const LOOKS: Record<(typeof STARTER_MODELS)[number], Look> = {
+  Vanguard: { file: 'HairSample_Male.vrm', dress: dressVanguard },
+  Duelist: { file: 'HairSample_Female.vrm', dress: dressDuelist },
+  Wanderer: { file: 'pixiv_sample.vrm' },
+  Fencer: { file: 'HairSample_Male.vrm', dress: dressDuelist },
 };
 
-interface Template {
-  scene: THREE.Object3D;
-  clips: THREE.AnimationClip[];
-  scale: number;
+/** Which library clip plays for each movement state. */
+const CLIPS: Record<number, string> = {
+  [Anim.Idle]: 'Sword_Idle',
+  [Anim.Walk]: 'Walk_Loop',
+  [Anim.Run]: 'Jog_Fwd_Loop',
+  [Anim.Sprint]: 'Sprint_Loop',
+  [Anim.Air]: 'Jump_Loop',
+};
+
+interface AnimLib {
+  clips: { clip: THREE.AnimationClip; source: THREE.Object3D }[];
+}
+let animLib: Promise<AnimLib> | null = null;
+function animations(): Promise<AnimLib> {
+  animLib ??= Promise.all([gltfLoader.loadAsync('/assets/anim/UAL1.glb'), gltfLoader.loadAsync('/assets/anim/UAL2.glb')]).then((libs) => ({
+    clips: libs.flatMap((g) => g.animations.map((clip) => ({ clip, source: g.scene }))),
+  }));
+  return animLib;
 }
 
-const loader = new GLTFLoader();
-const templates = new Map<number, Promise<Template | null>>();
+let katanaModel: Promise<THREE.Object3D> | null = null;
+function katana(): Promise<THREE.Object3D> {
+  katanaModel ??= gltfLoader.loadAsync(`${PH}/models/antique_katana_01/antique_katana_01_1k.gltf`).then((g) => {
+    g.scene.traverse((c) => {
+      const m = c as THREE.Mesh;
+      if (m.isMesh) m.castShadow = true;
+    });
+    return g.scene;
+  });
+  return katanaModel.then((k) => k.clone());
+}
 
-function loadTemplate(model: number): Promise<Template | null> {
-  let p = templates.get(model);
-  if (!p) {
-    const name = STARTER_MODELS[model] ?? STARTER_MODELS[0];
-    p = loader
-      .loadAsync(`${BASE}${name}.glb`)
-      .then((gltf: GLTF) => {
-        const scene = gltf.scene;
-        // Keep one item per hand; the rest of the pack's held items are hidden until gear exists.
-        // (GLTFLoader strips the "." from node names, so "handslot.r" arrives as "handslotr".)
-        scene.traverse((o) => {
-          const hand = /^handslot\.?([lr])$/.exec(o.name)?.[1];
-          if (!hand) return;
-          const items = o.children;
-          const keep = hand === 'l' ? (items.find((c) => /shield/i.test(c.name)) ?? items[0]) : items[0];
-          for (const c of items) c.visible = c === keep;
-        });
-        toonify(scene);
-        scene.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(scene);
-        const height = Math.max(0.1, box.max.y - box.min.y);
-        return { scene, clips: gltf.animations, scale: TARGET_HEIGHT / height };
-      })
-      .catch((err: unknown) => {
-        console.warn(`could not load ${name}.glb (run npm run fetch-assets?)`, err);
-        return null;
-      });
-    templates.set(model, p);
+async function loadAvatar(model: number): Promise<{ vrm: VRM; mixer: THREE.AnimationMixer; actions: Map<number, THREE.AnimationAction> }> {
+  const look = LOOKS[STARTER_MODELS[model] ?? STARTER_MODELS[0]];
+  const [gltf, lib, blade] = await Promise.all([vrmLoader.loadAsync(`/assets/vrm/${look.file}`), animations(), katana()]);
+  const vrm = gltf.userData.vrm as VRM;
+  VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMUtils.combineSkeletons(gltf.scene);
+  VRMUtils.rotateVRM0(vrm);
+  vrm.scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh) {
+      m.castShadow = true;
+      m.frustumCulled = false;
+    }
+  });
+  // Armor is fitted in the rest pose, before any animation plays.
+  look.dress?.(vrm);
+  const hand = vrm.humanoid.getRawBoneNode('rightHand');
+  if (hand) {
+    // Grip in the palm, blade out past the thumb.
+    blade.rotation.set(0, 0, -Math.PI / 2);
+    blade.position.set(-0.04, -0.02, 0);
+    hand.add(blade);
   }
-  return p;
+  const mixer = new THREE.AnimationMixer(vrm.scene);
+  const actions = new Map<number, THREE.AnimationAction>();
+  for (const [anim, clipName] of Object.entries(CLIPS)) {
+    const src = lib.clips.find((c) => c.clip.name === clipName);
+    if (src) actions.set(Number(anim), mixer.clipAction(retargetClip(src.clip, src.source, vrm)));
+    else console.warn('missing animation', clipName);
+  }
+  return { vrm, mixer, actions };
 }
 
-/** Start downloading the starter models early. */
+/** Start downloading the shared animation library and katana early. */
 export function preloadCharacters(): Promise<unknown> {
-  return Promise.all(STARTER_MODELS.map((_, i) => loadTemplate(i)));
+  return Promise.all([animations(), katana()]).catch((err: unknown) => console.warn('could not preload characters (run npm run fetch-lookdev-assets?)', err));
 }
 
 function placeholder(): THREE.Object3D {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 0.9, 4, 12), toonMaterial({ color: '#8fb3ff' }));
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 1.0, 4, 12), new THREE.MeshStandardMaterial({ color: '#8fb3ff', roughness: 0.6, transparent: true, opacity: 0.5 }));
   body.position.y = 0.8;
-  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.3), toonMaterial({ color: '#333' }));
-  nose.position.set(0, 1.25, 0.35);
-  g.add(body, nose);
-  return g;
+  return body;
 }
 
 export class Avatar {
   readonly root = new THREE.Group();
+  private vrm: VRM | null = null;
   private mixer: THREE.AnimationMixer | null = null;
   private actions = new Map<number, THREE.AnimationAction>();
   private current = -1;
   private label: CSS2DObject;
   private labelEl: HTMLDivElement;
+  private disposed = false;
 
   constructor(
     model: number,
@@ -94,24 +124,25 @@ export class Avatar {
     this.labelEl.innerHTML = `<span class="cursor"></span><span class="name"></span>`;
     this.setName(name);
     this.label = new CSS2DObject(this.labelEl);
-    this.label.position.set(0, 2.05, 0);
+    this.label.position.set(0, 2.0, 0);
     this.root.add(this.label);
 
-    void loadTemplate(model).then((t) => {
-      if (!t) return;
-      const model3d = cloneSkinned(t.scene);
-      model3d.scale.setScalar(t.scale);
-      this.root.remove(fallback);
-      this.root.add(model3d);
-      this.mixer = new THREE.AnimationMixer(model3d);
-      for (const [anim, clipName] of Object.entries(CLIPS)) {
-        const clip = THREE.AnimationClip.findByName(t.clips, clipName);
-        if (clip) this.actions.set(Number(anim), this.mixer.clipAction(clip));
-      }
-      const want = this.current;
-      this.current = -1;
-      this.play(want < 0 ? Anim.Idle : want);
-    });
+    loadAvatar(model)
+      .then(({ vrm, mixer, actions }) => {
+        if (this.disposed) {
+          VRMUtils.deepDispose(vrm.scene);
+          return;
+        }
+        this.root.remove(fallback);
+        this.root.add(vrm.scene);
+        this.vrm = vrm;
+        this.mixer = mixer;
+        this.actions = actions;
+        const want = this.current;
+        this.current = -1;
+        this.play(want < 0 ? Anim.Idle : want);
+      })
+      .catch((err: unknown) => console.warn('could not load avatar (run npm run fetch-lookdev-assets?)', err));
   }
 
   setName(name: string): void {
@@ -124,8 +155,8 @@ export class Avatar {
     const prev = this.actions.get(this.current);
     this.current = anim;
     if (!next) return;
-    next.reset().setEffectiveWeight(1).fadeIn(0.15).play();
-    if (prev && prev !== next) prev.fadeOut(0.15);
+    next.reset().setEffectiveWeight(1).fadeIn(0.2).play();
+    if (prev && prev !== next) prev.fadeOut(0.2);
   }
 
   update(dt: number, x: number, y: number, z: number, facing: number, anim: number, speed: number): void {
@@ -135,17 +166,21 @@ export class Avatar {
     const action = this.actions.get(this.current);
     if (action) {
       // Match leg speed to ground speed a little so feet slide less.
-      if (anim === Anim.Walk) action.timeScale = Math.max(0.6, speed / 2.2);
-      else if (anim === Anim.Run) action.timeScale = Math.max(0.8, speed / 5.5);
+      if (anim === Anim.Walk) action.timeScale = Math.max(0.6, speed / 1.6);
+      else if (anim === Anim.Run) action.timeScale = Math.max(0.8, speed / 4.2);
+      else if (anim === Anim.Sprint) action.timeScale = Math.max(0.8, speed / 7.5);
       else action.timeScale = 1;
     }
     this.mixer?.update(dt);
+    this.vrm?.update(dt);
   }
 
   dispose(): void {
+    this.disposed = true;
     this.label.element.remove();
     this.root.removeFromParent();
     this.mixer?.stopAllAction();
+    if (this.vrm) VRMUtils.deepDispose(this.vrm.scene);
   }
 
   get local(): boolean {

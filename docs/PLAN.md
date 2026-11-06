@@ -381,9 +381,16 @@ Commit after each step to `claude/admiring-allen-o82s38` and push. No PR unless 
 - **Art direction (in progress, 2026-11-05):** the user found the KayKit toon look too cartoonish. A
   look test (`client/lookdev.html`) tries a closer-to-SAO style: VRM anime characters with retargeted
   CC0 animations, CC0 village kit + Poly Haven PBR, ez-tree trees, original outfits and teleport gate,
-  neutral tone mapping. Not adopted into the game yet; Blender + Blender MCP installed to model
-  proper assets (first one: the teleport gate, `art/gate/`). Step 2 (combat) waits until the style is
-  settled.
+  neutral tone mapping. Blender + Blender MCP installed to model proper assets (first one: the
+  teleport gate, `art/gate/`).
+- **World restyle (2026-11-06):** the M1 maps now render in the look-test style: PBR + HDRI sky +
+  AO/bloom, the Blender gate, lamp, fountain and boss pillar, village-kit houses, ez-tree trees,
+  Poly Haven rocks and grass. Shared movement gained walkable platforms (the gate's steps) and
+  rotated box colliders (houses). Players are VRM anime avatars with original outfits. The town
+  is an original walled starting city (plaza + gate, avenues, ring road, city wall, Hall of
+  Remembrance). Movement acceleration is now a vector (no sideways slide along angled walls).
+  Next art pass: the Floor 1 overworld (grassland, forest/lake routes, labyrinth tower).
+  Step 2 (combat) waits until the style is settled.
 
 ## Roadmap after M1
 - M2 Floors 2-10: 3 biome kits, mechanic library ~20, Extra skills, first Unique-skill quests, story

@@ -5,7 +5,9 @@ import {
   PredictedMover,
   animFor,
   copyMoveState,
+  CITY,
   getMap,
+  groundHeight,
   newMoveState,
   resolveCollisions,
   sanitizeInput,
@@ -50,19 +52,61 @@ describe('movement', () => {
     expect(s.facing).toBeCloseTo(Math.PI / 2, 3);
   });
 
-  it('cannot leave the map or walk through the gate pillars', () => {
+  it('cannot leave the map or walk through a fountain', () => {
     const out = resolveCollisions(town, 100, 0, MOVE.radius);
-    expect(Math.hypot(out.x, out.z)).toBeCloseTo(40 - MOVE.radius, 5);
-    const pillar = town.circles[0]!;
-    const pushed = resolveCollisions(town, pillar.x + 0.1, pillar.z, MOVE.radius);
-    expect(Math.hypot(pushed.x - pillar.x, pushed.z - pillar.z)).toBeGreaterThanOrEqual(pillar.r + MOVE.radius - 1e-9);
+    expect(Math.hypot(out.x, out.z)).toBeCloseTo(CITY.boundR - MOVE.radius, 5);
+    const fountain = town.circles[0]!;
+    const pushed = resolveCollisions(town, fountain.x + 0.1, fountain.z, MOVE.radius);
+    expect(Math.hypot(pushed.x - fountain.x, pushed.z - fountain.z)).toBeGreaterThanOrEqual(fountain.r + MOVE.radius - 1e-9);
   });
 
-  it('cannot walk into buildings', () => {
-    const b = town.boxes[0]!;
+  it('cannot walk into the gate obelisks', () => {
+    // The front-right obelisk footing; walk at it from the plaza in front.
+    const b = town.boxes.find((x) => x.minX > 0 && x.minZ > 0 && !x.rot)!;
     const s = newMoveState((b.minX + b.maxX) / 2, b.maxZ + 3);
     for (let i = 0; i < 90; i++) stepMovement(s, input(i, 0, -1), town);
     expect(s.z).toBeGreaterThanOrEqual(b.maxZ + MOVE.radius - 1e-6);
+  });
+
+  it('cannot walk into rotated buildings', () => {
+    // The house nearest the plaza that is turned well off the axes; nothing stands in front of it.
+    const dist = (x: (typeof town.boxes)[number]) => Math.hypot((x.minX + x.maxX) / 2, (x.minZ + x.maxZ) / 2);
+    const b = town.boxes.filter((x) => x.rot && Math.abs(Math.sin(2 * x.rot)) > 0.5).sort((p, q) => dist(p) - dist(q))[0]!;
+    const cx = (b.minX + b.maxX) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+    const half = (b.maxX - b.minX) / 2;
+    // Walk from the plaza straight at the house centre.
+    const d = Math.hypot(cx, cz);
+    const s = newMoveState((cx / d) * (d - half - 4), (cz / d) * (d - half - 4));
+    for (let i = 0; i < 120; i++) stepMovement(s, input(i, cx / d, cz / d), town);
+    // The house front is square to the plaza, so we stop one radius short of it.
+    expect(Math.hypot(s.x - cx, s.z - cz)).toBeCloseTo(half + MOVE.radius, 2);
+  });
+
+  it('walks up the gate steps and back down', () => {
+    expect(groundHeight(town, 0, 0)).toBeCloseTo(0.96, 9);
+    const s = newMoveState(0, 8);
+    for (let i = 0; i < 90; i++) stepMovement(s, input(i, 0, -1), town);
+    // Up three 0.32 m steps onto the deck, stopped by the back wall.
+    expect(s.grounded).toBe(true);
+    expect(s.y).toBeCloseTo(0.96, 9);
+    expect(s.z).toBeLessThan(-1.5);
+    for (let i = 0; i < 90; i++) stepMovement(s, input(i, 1, 0), town);
+    expect(s.y).toBe(0);
+    expect(s.grounded).toBe(true);
+  });
+
+  it('cannot walk up a ledge taller than a step', () => {
+    const map = { ...field, platforms: [{ minX: -2, maxX: 2, minZ: -2, maxZ: 2, top: 1 }] };
+    const s = newMoveState(0, 5);
+    for (let i = 0; i < 60; i++) stepMovement(s, input(i, 0, -1), map);
+    expect(s.z).toBeGreaterThan(2);
+    expect(s.y).toBe(0);
+    // ...but can jump onto it.
+    stepMovement(s, input(60, 0, -1, true), map);
+    for (let i = 0; i < 60 && !s.grounded; i++) stepMovement(s, input(61 + i, 0, -1), map);
+    expect(s.grounded).toBe(true);
+    expect(s.y).toBe(1);
   });
 
   it('is deterministic', () => {
