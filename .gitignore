@@ -8,3 +8,7 @@ client/public/assets/kaykit/
 data/*.sqlite*
 test-results/
 playwright-report/
+client/public/assets/village/
+client/public/assets/vrm/
+client/public/assets/anim/
+client/public/assets/polyhaven/

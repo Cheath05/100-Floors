@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "fetch-assets": "tsx tools/fetch-assets.ts",
+    "fetch-lookdev-assets": "tsx tools/fetch-lookdev-assets.ts",
     "test": "vitest run",
     "bots": "tsx tools/bots.ts",
     "typecheck": "tsc -p shared && tsc -p server && tsc -p tools && tsc -p client",

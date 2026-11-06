@@ -24,11 +24,28 @@ team boss fights. Three.js client, authoritative Colyseus server, TypeScript eve
 - `npm run dev`: server on :8100 + client on http://localhost:5200.
 - `npm run fetch-assets`: downloads the CC0 KayKit packs (pinned commits) into
   `client/public/assets/kaykit/` (gitignored, ~47 MB).
+- `npm run fetch-lookdev-assets`: downloads the look-test art (VRM characters, Quaternius
+  animations + village kit, Poly Haven textures/models/sky; ~160 MB, gitignored, hashes pinned).
 - `npm test`, `npm run typecheck`, `npm run check` (both).
 - `npm run bots -- [count] [seconds] [room]`: headless players against a running server; prints
   whether every client agrees on positions.
 - `npm start`: builds the client and serves everything from the game server on :8100.
 - URL options: `?name=X&room=field&auto` skips the start panel; `?server=http://host:port`.
+
+## Art direction look test (in progress)
+
+- http://localhost:5200/lookdev.html (`client/src/lookdev/`) is the candidate art style, not yet in the
+  game: VRM anime characters (`@pixiv/three-vrm`, MToon) with Quaternius animations retargeted in
+  `retarget.ts`; town from the Quaternius village kit; Poly Haven PBR textures and HDRI sky; ez-tree
+  trees; `grass.ts`; original outfits/armor in `outfits.ts`; street props in `props.ts`; the
+  teleport gate (stepped dais, 4 obelisks, swirling orb) in `gate.ts`.
+- URL options: `?view=gate`, `?tm=agx|aces` (default neutral tone mapping keeps saturated anime
+  color), `?ao=0`, `?grass=N`, `?ceiling=1` (rough floor-above sky), `?clips=A,B,C`.
+- Blender 5.2 with the official Blender Lab MCP (`blender` server, Blender add-on on localhost:9876)
+  and the VRM add-on is installed. Use it to model props/armor. Our own models are committed:
+  .blend sources in `art/`, exported GLB in `client/public/models/` (keep them small: 1k-2k
+  textures). `client/public/assets/` is only for downloaded packs and is gitignored.
+- Characters still need proper avatars (VRoid Studio); code-built armor is a stopgap.
 
 ## Rules that must hold
 

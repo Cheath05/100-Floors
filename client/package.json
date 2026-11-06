@@ -10,8 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@floors/shared": "*",
     "@colyseus/sdk": "^0.18.9",
+    "@dgreenheck/ez-tree": "^1.1.0",
+    "@floors/shared": "*",
+    "@pixiv/three-vrm": "^3.5.5",
     "three": "^0.187.0"
   },
   "devDependencies": {
