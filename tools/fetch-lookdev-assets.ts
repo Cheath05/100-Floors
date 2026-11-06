@@ -144,6 +144,8 @@ async function fetchZips(): Promise<void> {
       }
       console.log('pack', basename(z.url));
     } finally {
+      // Some packs ship read-only folders; make them writable so the temp copy can be removed.
+      execFileSync('chmod', ['-R', 'u+w', tmp]);
       await rm(tmp, { recursive: true, force: true });
     }
   }
