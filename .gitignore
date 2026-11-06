@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+# downloaded art packs (re-fetch with: npm run fetch-assets)
+client/public/assets/kaykit/
+.cache/
+data/*.sqlite*
+test-results/
+playwright-report/

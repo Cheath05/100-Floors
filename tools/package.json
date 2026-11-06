@@ -1,0 +1,11 @@
+{
+  "name": "@floors/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev tools: asset fetcher, bot clients, dev launcher",
+  "dependencies": {
+    "@floors/shared": "*",
+    "@colyseus/sdk": "^0.18.9"
+  }
+}

@@ -1,0 +1,176 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0a10;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: #f2f4f8;
+  user-select: none;
+}
+#app {
+  position: fixed;
+  inset: 0;
+}
+canvas {
+  display: block;
+}
+.labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Name tags with the SAO-style green cursor above other players. */
+.nametag {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+.nametag .name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: rgba(20, 24, 32, 0.55);
+  text-shadow: 0 1px 2px #000;
+}
+.nametag .cursor {
+  order: -1;
+  width: 12px;
+  height: 16px;
+  background: linear-gradient(#9dff8a, #3bd14a);
+  clip-path: polygon(50% 100%, 0 30%, 25% 0, 75% 0, 100% 30%);
+  filter: drop-shadow(0 0 3px rgba(80, 255, 110, 0.8));
+  animation: bob 1.6s ease-in-out infinite;
+}
+.nametag.local .cursor {
+  display: none;
+}
+.nametag.local .name {
+  opacity: 0.75;
+}
+@keyframes bob {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.debug-hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: rgba(10, 12, 20, 0.55);
+  border-left: 3px solid #52c8ff;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.debug-hud .safe {
+  color: #8dffb0;
+}
+.debug-hud .outer {
+  color: #ffb08d;
+}
+.click-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  font-size: 14px;
+  background: rgba(10, 12, 20, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 20px;
+  pointer-events: none;
+  display: none;
+}
+.error-box {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 460px;
+  padding: 16px 20px;
+  background: rgba(60, 10, 16, 0.9);
+  border: 1px solid #ff6b7a;
+  border-radius: 6px;
+}
+
+.start-panel {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 40%, rgba(20, 30, 60, 0.35), rgba(5, 6, 12, 0.75));
+}
+.start-card {
+  width: 340px;
+  padding: 26px 28px 20px;
+  background: rgba(244, 246, 250, 0.94);
+  color: #2a2d36;
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.start-card h1 {
+  margin: 0;
+  font-size: 26px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1f6fc4;
+}
+.start-card .sub {
+  margin: -6px 0 6px;
+  font-size: 12px;
+  color: #6b7080;
+}
+.start-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4a4f5c;
+}
+.start-card input,
+.start-card select {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 9px;
+  border: 1px solid #c7ccd8;
+  border-radius: 4px;
+  background: #fff;
+}
+.start-card button {
+  margin-top: 6px;
+  padding: 10px;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #fff;
+  background: linear-gradient(#3d9bf0, #1f6fc4);
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.start-card button:hover {
+  filter: brightness(1.1);
+}
+.start-card .hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #7a7f8c;
+  text-align: center;
+}

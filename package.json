@@ -1,0 +1,31 @@
+{
+  "name": "100-floors",
+  "private": true,
+  "type": "module",
+  "description": "100 Floors: an SAO-inspired co-op action RPG for the browser (Three.js client, Colyseus server)",
+  "workspaces": [
+    "shared",
+    "server",
+    "client",
+    "tools"
+  ],
+  "scripts": {
+    "fetch-assets": "tsx tools/fetch-assets.ts",
+    "test": "vitest run",
+    "bots": "tsx tools/bots.ts",
+    "typecheck": "tsc -p shared && tsc -p server && tsc -p tools && tsc -p client",
+    "dev": "node tools/dev.mjs",
+    "build": "npm run build -w @floors/client",
+    "start": "npm run build && tsx server/src/main.ts --serve-client",
+    "check": "npm run typecheck && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^5.1.0"
+  }
+}

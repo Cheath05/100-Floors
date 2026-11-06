@@ -1,0 +1,8 @@
+{
+  "name": "@floors/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure TypeScript game rules, data and protocol shared by server and client",
+  "exports": { ".": "./src/index.ts", "./*": "./src/*.ts" }
+}

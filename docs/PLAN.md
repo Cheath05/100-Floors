@@ -369,6 +369,16 @@ skill-storage bottle page.
    vm-setup.sh for the Proxmox VM, HOSTING.md (stable link with a domain, optional Cloudflare Access).
 Commit after each step to `claude/admiring-allen-o82s38` and push. No PR unless asked.
 
+### Progress
+- **Step 1 done (2026-11-05):** npm workspaces (`shared`, `server`, `client`, `tools`), KayKit fetcher
+  (pinned commits: Adventurers, Skeletons, Dungeon Remastered; no nature pack on GitHub, so trees and
+  rocks are drawn in code), toon scene (3-band ramp, ink outlines, bloom, sky with the floor above),
+  third-person camera, WASD/jump/sprint, Colyseus town/field/boss rooms, client prediction +
+  reconciliation, 100 ms interpolation, bot clients. 4 real clients stay in sync (test + `npm run bots`).
+  Deviations: Colyseus is 0.18 (newer API); movement is a shared pure-TS step on flat ground instead of
+  Rapier, so prediction replays exactly (Rapier comes in when terrain/labyrinth geometry needs it);
+  TypeScript 6 (Colyseus doesn't support 7 yet); ports 5200/8100.
+
 ## Roadmap after M1
 - M2 Floors 2-10: 3 biome kits, mechanic library ~20, Extra skills, first Unique-skill quests, story
   chapter 1 + world naming, recruitable companions, map/quest log, curved sword + 1H axe (+ Katana extra).
